@@ -1,0 +1,8 @@
+Pillow
+pyautogui
+pyperclip
+python-dotenv
+ollama
+pynput
+requests
+jinja2
