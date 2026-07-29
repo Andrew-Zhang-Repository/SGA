@@ -1,33 +1,36 @@
 import os
 import sys
 import time
-import base64
-import hashlib
 import threading
-from io import BytesIO
 from pathlib import Path
 
 from dotenv import load_dotenv
-from PIL import Image, ImageGrab
+from PIL import ImageGrab
 import pyperclip
 import requests
 from pynput import keyboard
 from jinja2 import Environment, FileSystemLoader
+import pytesseract
+import cv2
 
 try:
     import ollama
 except ImportError:
     ollama = None
 
-MIN_OLLAMA_VER = (0, 12, 7)
+
+CAPTURE_DIR = Path(__file__).parent / 'captures'
+CAPTURE_PATH = CAPTURE_DIR / 'latest.jpg'
 
 
 class TestAutomation:
     def __init__(self):
+        CAPTURE_DIR.mkdir(exist_ok=True)
+
         load_dotenv()
 
+        self.answer_model = os.getenv('OLLAMA_MODEL')
         self.discord_webhook = os.getenv('DISCORD_WEBHOOK_URL', '')
-        self.ollama_model = os.getenv('OLLAMA_MODEL')
 
         trigger_key_str = os.getenv('TRIGGER_KEY', 'print_screen').lower().replace(' ', '_')
         self.trigger_key = getattr(keyboard.Key, trigger_key_str, None)
@@ -40,43 +43,81 @@ class TestAutomation:
         self.execution_mode = os.getenv('EXECUTION_MODE', 'quick').lower()
         self.running = True
         self.processing = False
-        self.last_hash = None
 
         if ollama is None:
             print("ERROR: ollama Python library not installed. Run: pip install ollama")
             sys.exit(1)
 
-        self._check_ollama_version()
-        self.image_max_dim = int(os.getenv('IMAGE_MAX_DIM', '1280'))
+    def _save_image(self, img):
+        img.save(CAPTURE_PATH, format='JPEG')
+        return str(CAPTURE_PATH)
 
-    def _check_ollama_version(self):
+    def _extract_text(self, image_path):
+        image = cv2.imread(image_path)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        return pytesseract.image_to_string(gray)
+
+    def _classify_question(self, text):
+        router_prompt = self.jinja_env.get_template('router.jinja').render()
+
+        response = ollama.chat(
+            model=self.answer_model,
+            messages=[{
+                'role': 'user',
+                'content': f"{router_prompt}\n\n---\n\n{text}"
+            }]
+        )
+
+        q_type = response['message']['content'].strip().lower()
+        valid = ['quickfire', 'maths', 'coding', 'data_analysis', 'diagram', 'psychometric']
+
+        if q_type not in valid:
+            q_type = 'psychometric'
+
+        return q_type
+
+    def _render_prompt(self, q_type):
         try:
-            resp = requests.get('http://localhost:11434/api/version', timeout=2)
-            ver_str = resp.json().get('version', '')
-            parts = [int(p) for p in ver_str.split('.')[:3]]
-            if parts < list(MIN_OLLAMA_VER):
-                print(f"[!] Ollama server v{ver_str} may be too old for Qwen3-VL")
-                print(f"    Minimum required: v{'.'.join(str(v) for v in MIN_OLLAMA_VER)}")
+            template = self.jinja_env.get_template(f'{q_type}.jinja')
+        except:
+            template = self.jinja_env.get_template('psychometric.jinja')
+
+        base_content = ''
+        try:
+            base_template = self.jinja_env.get_template('base.jinja')
+            base_content = base_template.render()
         except:
             pass
 
-    def _prepare_image(self, img):
-        # Convert to RGB (some vision models fail with RGBA transparency)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-            
-        max_dim = self.image_max_dim
-        w, h = img.size
-        if max(w, h) > max_dim:
-            ratio = max_dim / max(w, h)
-            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+        exec_mode = "QUICK_FIRE" if self.execution_mode == 'quick' else ""
+        return template.render(base=base_content, execution_mode=exec_mode)
 
-        buffered = BytesIO()
-        # JPEG prevents alpha channel issues and reduces base64 payload size
-        img.save(buffered, format='JPEG')
-        img_data = buffered.getvalue()
-        img_b64 = base64.b64encode(img_data).decode()
-        return img_data, img_b64
+    def _answer_coding(self, text):
+        prompt = self._render_prompt('coding')
+
+        response = ollama.chat(
+            model=self.answer_model,
+            messages=[{
+                'role': 'user',
+                'content': f"{prompt}\n\n---\n\n{text}"
+            }]
+        )
+
+        return response['message']['content']
+
+    def _answer_with_vision(self, image_path, q_type):
+        prompt = self._render_prompt(q_type)
+
+        response = ollama.chat(
+            model=self.answer_model,
+            messages=[{
+                'role': 'user',
+                'content': prompt,
+                'images': [image_path]
+            }]
+        )
+
+        return response['message']['content']
 
     def handle_screenshot(self):
         if self.processing:
@@ -94,77 +135,33 @@ class TestAutomation:
             if isinstance(img, list):
                 return
 
-            img_data, img_b64 = self._prepare_image(img)
-            img_hash = hashlib.md5(img_data).hexdigest()
-            if img_hash == self.last_hash:
-                self.processing = False
-                return
-            self.last_hash = img_hash
+            image_path = self._save_image(img)
 
-            print(f"[+] Processing screenshot...")
+            print("[+] Extracting text for classification...")
+            raw_text = self._extract_text(image_path)
+            print(f"    OCR: {raw_text[:100]}...")
 
-            q_type = self.classify_question(img_b64)
+            print("[+] Classifying question type...")
+            q_type = self._classify_question(raw_text)
             print(f"    -> Type: {q_type}")
 
-            answer = self.answer_question(img_b64, q_type)
+            print("[+] Generating answer...")
+            if q_type == 'coding':
+                answer = self._answer_coding(raw_text)
+            else:
+                answer = self._answer_with_vision(image_path, q_type)
+
             print(f"    -> Answer: {answer[:120]}...")
 
             pyperclip.copy(answer)
             self.send_to_discord(answer, q_type)
 
-            print(f"[✓] Done — clipboard + Discord")
+            print("[✓] Done — clipboard + Discord")
 
         except Exception as e:
             print(f"[!] Error: {e}")
         finally:
             self.processing = False
-
-    def classify_question(self, img_b64):
-        router_prompt = self.jinja_env.get_template('router.jinja').render()
-
-        response = ollama.chat(
-            model=self.ollama_model,
-            messages=[{
-                'role': 'user',
-                'content': router_prompt,
-                'images': [img_b64]
-            }]
-        )
-
-        q_type = response['message']['content'].strip().lower()
-        valid = ['quickfire', 'maths', 'coding', 'data_analysis', 'diagram', 'psychometric']
-
-        if q_type not in valid:
-            q_type = 'psychometric'
-
-        return q_type
-
-    def answer_question(self, img_b64, q_type):
-        try:
-            template = self.jinja_env.get_template(f'{q_type}.jinja')
-        except:
-            template = self.jinja_env.get_template('psychometric.jinja')
-
-        base_content = ''
-        try:
-            base_template = self.jinja_env.get_template('base.jinja')
-            base_content = base_template.render()
-        except:
-            pass
-
-        exec_mode = "QUICK_FIRE" if self.execution_mode == 'quick' else ""
-        prompt = template.render(base=base_content, execution_mode=exec_mode)
-
-        response = ollama.chat(
-            model=self.ollama_model,
-            messages=[{
-                'role': 'user',
-                'content': prompt,
-                'images': [img_b64]
-            }]
-        )
-
-        return response['message']['content']
 
     def send_to_discord(self, text, q_type):
         if not self.discord_webhook:
@@ -195,9 +192,12 @@ class TestAutomation:
         print("=" * 50)
         print("  Test Automation Assistant")
         print("=" * 50)
-        print(f"  Model:     {self.ollama_model}")
+        print(f"  Model:     {self.answer_model}")
         print(f"  Trigger:   {os.getenv('TRIGGER_KEY', 'print_screen')}")
         print(f"  Discord:   {'Configured' if self.discord_webhook else 'NOT configured'}")
+        print("=" * 50)
+        print("  Coding:    OCR text → Gemma3 text-only")
+        print("  Other:     Image → Gemma3 vision directly")
         print("=" * 50)
         print("  Press PrintScreen to capture & process")
         print("  Press ESC to stop")

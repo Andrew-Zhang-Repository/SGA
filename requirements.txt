@@ -6,3 +6,5 @@ ollama
 pynput
 requests
 jinja2
+pytesseract
+opencv-python

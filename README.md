@@ -1,0 +1,1 @@
+TODO: If coding use lighter weight model (gemma3:4b)
