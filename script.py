@@ -30,6 +30,8 @@ class TestAutomation:
         load_dotenv()
 
         self.answer_model = os.getenv('OLLAMA_MODEL')
+        self.text_model = os.getenv('TEXT_MODEL', self.answer_model)
+        self.router_model = os.getenv('ROUTER_MODEL', self.text_model)
         self.discord_webhook = os.getenv('DISCORD_WEBHOOK_URL', '')
 
         trigger_key_str = os.getenv('TRIGGER_KEY', 'print_screen').lower().replace(' ', '_')
@@ -43,6 +45,8 @@ class TestAutomation:
         self.execution_mode = os.getenv('EXECUTION_MODE', 'quick').lower()
         self.running = True
         self.processing = False
+
+        self.VISUAL_TYPES = {'diagram', 'data_analysis'}
 
         if ollama is None:
             print("ERROR: ollama Python library not installed. Run: pip install ollama")
@@ -61,7 +65,7 @@ class TestAutomation:
         router_prompt = self.jinja_env.get_template('router.jinja').render()
 
         response = ollama.chat(
-            model=self.answer_model,
+            model=self.router_model,
             messages=[{
                 'role': 'user',
                 'content': f"{router_prompt}\n\n---\n\n{text}"
@@ -92,11 +96,11 @@ class TestAutomation:
         exec_mode = "QUICK_FIRE" if self.execution_mode == 'quick' else ""
         return template.render(base=base_content, execution_mode=exec_mode)
 
-    def _answer_coding(self, text):
-        prompt = self._render_prompt('coding')
+    def _answer_text(self, text, q_type):
+        prompt = self._render_prompt(q_type)
 
         response = ollama.chat(
-            model=self.answer_model,
+            model=self.text_model,
             messages=[{
                 'role': 'user',
                 'content': f"{prompt}\n\n---\n\n{text}"
@@ -146,10 +150,12 @@ class TestAutomation:
             print(f"    -> Type: {q_type}")
 
             print("[+] Generating answer...")
-            if q_type == 'coding':
-                answer = self._answer_coding(raw_text)
-            else:
+            if q_type in self.VISUAL_TYPES:
+                print("    Route: Vision (Gemma4 sees image)")
                 answer = self._answer_with_vision(image_path, q_type)
+            else:
+                print("    Route: Text-only (OCR → Gemma3)")
+                answer = self._answer_text(raw_text, q_type)
 
             print(f"    -> Answer: {answer[:120]}...")
 
@@ -192,12 +198,15 @@ class TestAutomation:
         print("=" * 50)
         print("  Test Automation Assistant")
         print("=" * 50)
-        print(f"  Model:     {self.answer_model}")
-        print(f"  Trigger:   {os.getenv('TRIGGER_KEY', 'print_screen')}")
-        print(f"  Discord:   {'Configured' if self.discord_webhook else 'NOT configured'}")
+        print(f"  Router model: {self.router_model}")
+        print(f"  Text model:   {self.text_model}")
+        print(f"  Vision model: {self.answer_model}")
+        print(f"  Trigger:      {os.getenv('TRIGGER_KEY', 'print_screen')}")
+        print(f"  Discord:      {'Configured' if self.discord_webhook else 'NOT configured'}")
         print("=" * 50)
-        print("  Coding:    OCR text → Gemma3 text-only")
-        print("  Other:     Image → Gemma3 vision directly")
+        print("  Router:  OCR text  → Gemma3:12b  (classification)")
+        print("  Text:    OCR text  → Gemma3:4b   (answer)")
+        print("  Visual:  Image     → Gemma4:12b  (answer)")
         print("=" * 50)
         print("  Press PrintScreen to capture & process")
         print("  Press ESC to stop")
