@@ -12,3 +12,6 @@ EXECUTION_MODE=full
 ```
 
 ![Loading Animation](https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExdGpkbGJhczN1ODk4dnFiazFndGt0NHlnZm5qOGQ0OWYwend3bWY0bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/F0CYIYsPzlC4dVPcVe/giphy.gif)
+
+
+TODO: Add an agent for system design, and and answering general coding based questions.
