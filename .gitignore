@@ -1,7 +1,9 @@
 *.env
 __pycache__
+test*
 test.py
 image.png
 shapes*
 grid.png
 captures/
+graph*
