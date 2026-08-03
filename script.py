@@ -28,6 +28,7 @@ except ImportError:
 
 CAPTURE_DIR = Path(__file__).parent / 'captures'
 CAPTURE_PATH = CAPTURE_DIR / 'latest.jpg'
+RESUME_FILE = Path(__file__).parent / 'Updated_Resume.pdf'
 
 
 class TestAutomation:
@@ -40,6 +41,8 @@ class TestAutomation:
         self.text_model = os.getenv('TEXT_MODEL', self.answer_model)
         self.router_model = os.getenv('ROUTER_MODEL', self.text_model)
         self.code_model = os.getenv('CODE_MODEL', os.getenv('code_model', self.text_model))
+        self.system_design_model = os.getenv('SYSTEM_DESIGN_MODEL', os.getenv('system_design_model', self.text_model))
+        self.resume_model = os.getenv('RESUME_MODEL', os.getenv('resume_model', self.text_model))
         self.discord_webhook = os.getenv('DISCORD_WEBHOOK_URL', '')
 
         trigger_key_str = os.getenv('TRIGGER_KEY', 'print_screen').lower().replace(' ', '_')
@@ -112,6 +115,28 @@ class TestAutomation:
             print(f"    Table extraction failed: {e}")
             return None
 
+    def _load_resume(self):
+        resume_path = Path(os.getenv('RESUME_FILE', RESUME_FILE))
+        if not resume_path.is_absolute():
+            resume_path = Path(__file__).parent / resume_path
+
+        if resume_path.suffix.lower() == '.pdf':
+            try:
+                import fitz
+                doc = fitz.open(str(resume_path))
+                text = '\n'.join(page.get_text() for page in doc)
+                doc.close()
+                return text.strip()
+            except ImportError:
+                print("    WARNING: pymupdf not installed. Run: pip install pymupdf")
+                return ''
+            except Exception as e:
+                print(f"    Resume PDF read failed: {e}")
+                return ''
+        elif resume_path.exists():
+            return resume_path.read_text(encoding='utf-8').strip()
+        return ''
+
     def _classify_question(self, text):
         router_prompt = self.jinja_env.get_template('router.jinja').render()
 
@@ -124,14 +149,15 @@ class TestAutomation:
         )
 
         q_type = response['message']['content'].strip().lower()
-        valid = ['maths', 'coding', 'data_analysis', 'diagram', 'psychometric']
+        valid = ['maths', 'coding', 'general_coding', 'system_design',
+                 'data_analysis', 'diagram', 'psychometric', 'resume']
 
         if q_type not in valid:
             q_type = 'psychometric'
 
         return q_type
 
-    def _render_prompt(self, q_type):
+    def _render_prompt(self, q_type, resume_content=''):
         try:
             template = self.jinja_env.get_template(f'{q_type}.jinja')
         except:
@@ -145,10 +171,10 @@ class TestAutomation:
             pass
 
         exec_mode = "QUICK_FIRE" if self.execution_mode == 'quick' else ""
-        return template.render(base=base_content, execution_mode=exec_mode)
+        return template.render(base=base_content, execution_mode=exec_mode, resume_content=resume_content)
 
-    def _answer_text(self, text, q_type, model=None, table_text=None):
-        prompt = self._render_prompt(q_type)
+    def _answer_text(self, text, q_type, model=None, table_text=None, resume_content=''):
+        prompt = self._render_prompt(q_type, resume_content)
         model = model or self.text_model
 
         cleaned_text = self._cut_noise(text)
@@ -221,9 +247,16 @@ class TestAutomation:
             if q_type == 'diagram':
                 print("    Route: Vision (Gemma4 sees image)")
                 answer = self._answer_with_vision(image_path, q_type)
-            elif q_type == 'coding':
+            elif q_type in ('coding', 'general_coding'):
                 print("    Route: Coding (qwen2.5-coder) — no table extraction")
                 answer = self._answer_text(raw_text, q_type, model=self.code_model)
+            elif q_type == 'system_design':
+                print("    Route: System design — no table extraction")
+                answer = self._answer_text(raw_text, q_type, model=self.system_design_model)
+            elif q_type == 'resume':
+                print("    Route: Resume-based interview question — resume injected")
+                resume_content = self._load_resume()
+                answer = self._answer_text(raw_text, q_type, model=self.resume_model, resume_content=resume_content)
             else:
                 table_text = self._extract_tables(image_path)
                 if table_text:
@@ -277,6 +310,8 @@ class TestAutomation:
         print(f"  Router model: {self.router_model}")
         print(f"  Text model:   {self.text_model}")
         print(f"  Code model:   {self.code_model}")
+        print(f"  System design model: {self.system_design_model}")
+        print(f"  Resume model: {self.resume_model}")
         print(f"  Vision model: {self.answer_model}")
         print(f"  Trigger:      {os.getenv('TRIGGER_KEY', 'print_screen')}")
         print(f"  Discord:      {'Configured' if self.discord_webhook else 'NOT configured'}")
@@ -284,6 +319,8 @@ class TestAutomation:
         print("  Router:  OCR text  → Gemma3:12b  (classification)")
         print("  Text:    OCR text  → Gemma3:4b   (answer)")
         print("  Code:    OCR text  → qwen2.5-coder (answer)")
+        print("  System:  OCR text  → system design model (answer)")
+        print("  Resume:  OCR text + resume → resume model (answer)")
         print("  Visual:  Image     → Gemma4:12b  (answer)")
         print("=" * 50)
         print("  Press PrintScreen to capture & process")
