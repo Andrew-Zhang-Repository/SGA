@@ -17,4 +17,4 @@ EXECUTION_MODE=full
 ![Loading Animation](https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExdGpkbGJhczN1ODk4dnFiazFndGt0NHlnZm5qOGQ0OWYwend3bWY0bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/F0CYIYsPzlC4dVPcVe/giphy.gif)
 
 
-TODO: Agents now route to system design, general coding, and resume-based interview questions (answers grounded in `Updated_Resume.pdf`). Remaining work: tuning router edge cases.
+TODO: Agents now route to system design, general coding, and resume-based interview questions (answers grounded in `Updated_Resume.pdf`). Remaining work: tuning router edge cases. Add a cloud version seperate dir for free ollama and the paid cloud service based models in another directory free model scored quite poorly in a critical thinking test, and general problem thinking, and is not capable of spatial reasoning. 
